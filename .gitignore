@@ -142,3 +142,4 @@ cython_debug/
 nowandfuture/tessst.py
 .idea/
 data/*
+!/nowandfuture/util/data/
