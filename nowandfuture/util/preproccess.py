@@ -369,6 +369,11 @@ def compute_orientation(init_axcodes, final_axcodes):
 # 默认轴标签为左（L）、右（R）、后（P）、前（A）、下（I）、上（S）。
 # 创建以下变换以将体积重新定向为“右、前、下”（RAI）方向。
 def reorientation_RAI(data_array, meta_data: dict):
+    """
+    :param data_array: the data to reorientation
+    :param meta_data: the information of the data
+    :return: the reorientated data array
+    """
     to_ = 'RAI'
     ort = meta_data.get('orientation')
     assert ort is not None
@@ -721,7 +726,7 @@ def statics_mean_std(file_list: List[str], **kwargs):
     return mean, std, max_val, min_val
 
 
-def statics_mean_std2(file_list: List[str], **kwargs):
+def statistics_mean_std2(file_list: List[str], **kwargs):
     vol_var = kwargs.pop('vol_var')
 
     n = len(file_list)
@@ -756,7 +761,7 @@ def statics_mean_std2(file_list: List[str], **kwargs):
     return mean, np.sqrt(var), max_val, min_val
 
 
-def voxels_statics(np_data: np.ndarray, do_print=True, statics_voxel_class=False):
+def voxels_statistics(np_data: np.ndarray, do_print=True, statics_voxel_class=False):
     mu = np.mean(np_data)
     sum_ = np.sum(np_data)
     std = np.std(np_data)
@@ -798,7 +803,7 @@ def get_overall_bounding_box(b_list: List[Dict[float, List[Tuple]]], label):
     return tuple(min_list), tuple(max_list)
 
 
-def bounding_box_shapes_statics(b_list: List[Dict[float, List[Tuple]]], label):
+def bounding_box_shapes_statistics(b_list: List[Dict[float, List[Tuple]]], label):
     if len(b_list) <= 0:
         return None
 
@@ -819,7 +824,7 @@ def bounding_box_shapes_statics(b_list: List[Dict[float, List[Tuple]]], label):
     return shapes
 
 
-def gt_bounding_box_statics(gt_path, labels: Tuple[float], file_pattern='*', var_data='vol'):
+def gt_bounding_box_statistics(gt_path, labels: Tuple[float], file_pattern='*', var_data='vol'):
     """
     to statics all Ground Truth Voxels that the minimal bounding box to around them. the path should be a DIR of some
     voxels formatted of 'nii', 'nii.gz', 'npy', 'npz', 'mgz'
@@ -965,7 +970,7 @@ def center_crop(data, to_size):
     return data[dim_slice]
 
 
-def voxel_minimum_size_statics(files, vol='vol'):
+def voxel_minimum_size_statistics(files, vol='vol'):
     minimum_shape = None
 
     for f in files:

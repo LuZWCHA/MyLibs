@@ -8,6 +8,12 @@ from scipy import ndimage
 import nowandfuture.util.preproccess as prp
 from nowandfuture.surface_distance import lookup_tables
 
+"""
+This file is designed to find the landmarks for pancreas' gt mask only.
+Only for 3D voxels.
+Author: nowandfuture
+"""
+
 
 # todo use A start
 def find_nearest_path(data, start_point, stop_point):
@@ -89,17 +95,10 @@ def find_endpoint(data, start_point, stop_points):
 
 
 def get_contour(mask_gt, spacing_mm):
-    # _assert_is_bool_numpy_array("mask_gt", mask_gt)
-    # _assert_is_bool_numpy_array("mask_pred", mask_pred)
+    """
+    Copy from surface_distance and modified to find the surface of mask_gt.
 
-    # if not len(mask_gt.shape)  == len(spacing_mm):
-    #     raise ValueError("The arguments must be of compatible shape. Got mask_gt "
-    #                      "with {} dimensions ({}) and mask_pred with {} dimensions "
-    #                      "({}), while the spacing_mm was {} elements.".format(
-    #         len(mask_gt.shape),
-    #         mask_gt.shape, len(mask_pred.shape), mask_pred.shape,
-    #         len(spacing_mm)))
-
+    """
     num_dims = len(spacing_mm)
     if num_dims == 2:
         # _check_2d_numpy_array("mask_gt", mask_gt)
@@ -158,7 +157,10 @@ def get_contour(mask_gt, spacing_mm):
     return borders_gt
 
 
-def find2endpoints(data):
+def find2endpoints(data: np.ndarray):
+    """
+    Find the 2 endpoints of the pancreas
+    """
     border = get_contour(data, (1, 1, 1))
     border = np.argwhere(border == 1)
     start_point = border[0]
@@ -169,7 +171,7 @@ def find2endpoints(data):
     return endpoint0, endpoint1
 
 
-def recolor(start_point, data, r, color):
+def recolor(start_point, data: np.ndarray, r: int, color: int):
     def is_valid(point, shape):
         for i, limit in zip(tuple(point), shape):
             if i >= limit or i < 0:
@@ -322,7 +324,7 @@ def get_agv_var4landmarks(voxel_pathes, agv_save_path, eigen_save_path):
 
     return a_bar, eigenVal, eigenVec
 
-#
-# if __name__ == '__main__':
-#     pathes = [r'D:\download\labels_clip\0001.nii.gz', r'D:\download\labels_clip\0002.nii.gz']
-#     a_bar, eigenVal, eigenVec = get_agv_var4landmarks(pathes, "a_bar.npy", "eigen_datas.npz")
+
+def demo():
+    pathes = [r'D:\download\labels_clip\0001.nii.gz', r'D:\download\labels_clip\0002.nii.gz']
+    a_bar, eigenVal, eigenVec = get_agv_var4landmarks(pathes, "a_bar.npy", "eigen_datas.npz")
