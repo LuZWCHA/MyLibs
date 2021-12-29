@@ -121,10 +121,10 @@ def group(group_list, func):
         func(root, file_path, file_name, is_dir, **kwargs)
 
 
-def async_process(_from: str, _to: str, func: func_callback, pattern=r'.*', filter_tuple=(), target='name'):
-    pool = multiprocessing.Pool(1)
+def async_process(_from: str, _to: str, func: func_callback, pattern=r'.*', filter_tuple=(), target='name', pool=None):
     group_size = 20
-
+    if not pool:
+        pool = multiprocessing.Pool(multiprocessing.cpu_count() - 1)
 
     count, par_list =\
         Traverse().traverse_files_async(_from, func=func, target_dir=_to, pattern=pattern, filter_tuple=filter_tuple, target=target)

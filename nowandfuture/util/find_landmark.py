@@ -1,5 +1,7 @@
 import os
 import queue
+import time
+from typing import List
 
 import numpy as np
 import scipy
@@ -7,6 +9,7 @@ from scipy import ndimage
 
 import nowandfuture.util.preproccess as prp
 from nowandfuture.surface_distance import lookup_tables
+from queue import PriorityQueue as pq
 
 """
 This file is designed to find the landmarks for pancreas' gt mask only.
@@ -15,7 +18,77 @@ Author: nowandfuture
 """
 
 
-# todo use A start
+# A start
+def find_nearest_path_A_star(data, start_point, stop_point):
+    def fun(_cur_point, target_point):
+        return abs(_cur_point[0] - target_point[0]) + abs(_cur_point[1] - target_point[1]) + abs(_cur_point[2] - target_point[2])
+
+    class Node:
+        def __init__(self, g, h, point, parent=None):
+            self.g = g
+            self.h = h
+            self.point = point
+            self.parent = parent
+
+        def __lt__(self, other):
+            return self.h + self.g < self.h + self.g
+
+        def __hash__(self):
+            return hash(self.point)
+
+        def __eq__(self, other):
+            return self.point == other.point
+
+    def is_valid(point, shape):
+        for i, limit in zip(tuple(point), shape):
+            if i >= limit or i < 0:
+                return False
+
+        return True
+
+    directions = [[0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0]]
+
+    open_list = pq()
+    close_list = set()
+
+    g = 0
+    h = fun(start_point, stop_point)
+    cur_node = Node(g, h, start_point)
+    open_list.put(cur_node)
+    open_set = set()
+    path = queue.Queue()
+
+    while not open_list.empty():
+        cur_node = open_list.get()
+
+        if cur_node.point == stop_point:
+            while cur_node.parent:
+                path.put(cur_node)
+                cur_node = cur_node.parent
+            break
+
+        close_list.add(cur_node.point)
+        open_set.remove(cur_node.point)
+
+        for d in directions:
+            next_point = [i + j for i, j in zip(cur_node.point, d)]
+
+            if is_valid(next_point, data.shape) and next_point not in close_list:
+                next_node = Node(cur_node.g + 1, fun(next_point, stop_point), cur_node)
+                if next_node in open_set:
+                    for i in open_list.queue:
+                        if i.point == next_node.point and i.g + i.h > next_node.h + next_node.g:
+                            i.parent = next_node.parent
+                            i.g = next_node.g
+                            i.h = next_node.h
+                            break
+                else:
+                    open_list.put(next_node)
+                    open_set.add(next_point)
+
+    return path
+
+
 def find_nearest_path(data, start_point, stop_point):
     def is_valid(point, shape):
         for i, limit in zip(tuple(point), shape):
@@ -153,7 +226,7 @@ def get_contour(mask_gt, spacing_mm):
     # surface_area_map_gt = neighbour_code_to_surface_area[neighbour_code_map_gt]
     # surfel_areas_gt = surface_area_map_gt[borders_gt]
 
-    print(borders_gt.shape)
+    # print(borders_gt.shape)
     return borders_gt
 
 
@@ -200,7 +273,7 @@ def recolor(start_point, data: np.ndarray, r: int, color: int):
                 data[next_point[0], next_point[1], next_point[2]] = color
 
 
-def get_landmarks_by_file(file_path, segment_count=8):
+def get_landmarks_by_voxelfile(file_path, segment_count=9):
     return get_landmarks(data=prp.read_one_voxel(file_path), segment_count=segment_count)
 
 
@@ -214,7 +287,6 @@ def get_landmarks(data, segment_count=8, recolored_file_path=None):
     border = np.argwhere(border == 1)
 
     path = find_nearest_path(data, p0, p1)
-    # print(path)
     i = 0
     path_list = []
     while not path.empty():
@@ -226,12 +298,12 @@ def get_landmarks(data, segment_count=8, recolored_file_path=None):
     recolor(p0, data, 20, 2)
     recolor(p1, data, 20, 2)
 
-    segment = i // segment_count
+    segment = i / segment_count
 
     landmarks = []
 
-    for j in range(0, i, segment):
-        landmarks.append(path_list[j])
+    for j in range(0, segment_count):
+        landmarks.append(path_list[int(j * segment)])
 
     normal_vectors = []
     prelandmarks = landmarks[1: -1]
@@ -271,22 +343,92 @@ def get_landmarks(data, segment_count=8, recolored_file_path=None):
     return a
 
 
-def get_agv_var4landmarks(voxel_pathes, agv_save_path, eigen_save_path):
+import tqdm
+import multiprocessing.pool as pool
+import multiprocessing.queues as async_queue
+
+
+def wrap_find_landmarks(p):
+    return p, get_landmarks_by_voxelfile(p)
+
+
+def multi_process(tasks, process_num=20):
+    l = []
+    p = pool.Pool(process_num)
+
+    gen = p.imap(wrap_find_landmarks, tasks)
+    bar = tqdm.tqdm(gen, total=len(tasks))
+    bar.set_description_str("start...")
+    for path, lm_array in bar:
+        l.append((path, lm_array))
+        bar.set_description_str(f"{os.path.basename(path)}")
+        bar.set_postfix_str(f"shape: {lm_array.shape}")
+
+    p.close()
+    p.join()
+
+    return l
+
+
+def get_agv_var4landmarks(voxel_path, agv_save_path, eigen_save_path, landmark_path=None, landmark_suffix='.landmark.npy'):
+    def read_landmarks(lmk_dir, vx_file):
+        file_name = os.path.basename(vx_file)
+        return np.load(os.path.join(lmk_dir, file_name + landmark_suffix))
+
     sum_lm = None
     landmarks_list = []
-    for p in voxel_pathes:
-        lm_array = get_landmarks(p)
-        landmarks_list.append(lm_array)
 
+    print("Finding landmarks...")
+    list_find = []
+    landmark_shape = (1, 27)
+    for p in voxel_path:
+        file_name = os.path.basename(p)
+        if landmark_path:
+            lmk_save_path = os.path.join(landmark_path, file_name + landmark_suffix)
+        else:
+            lmk_save_path = f'{p}{landmark_suffix}'
+
+        if not os.path.exists(lmk_save_path):
+            # lm_array = get_landmarks_by_voxelfile(p)
+            # # lmk_save_path = os.path.join(landmark_path, file_name, landmark_suffix)
+            # np.save(lmk_save_path, lm_array)
+            list_find.append(p)
+        else:
+            lm_array = read_landmarks(landmark_path, p)
+            if landmark_shape != lm_array.shape:
+                print(f"Skip {p}")
+                continue
+
+            landmarks_list.append(lm_array)
+            if sum_lm is None:
+                sum_lm = lm_array
+            else:
+                sum_lm += lm_array
+
+    l = multi_process(list_find)
+
+    for path, lm_array in l:
+        if landmark_shape != lm_array.shape:
+            print(f"Skip {path}")
+            continue
+        file_name = os.path.basename(path)
+        if landmark_path:
+            lmk_save_path = os.path.join(landmark_path, file_name + landmark_suffix)
+        else:
+            lmk_save_path = f'{path}{landmark_suffix}'
+        landmarks_list.append(lm_array)
+        np.save(lmk_save_path, lm_array)
         if sum_lm is None:
             sum_lm = lm_array
         else:
             sum_lm += lm_array
 
-    a_bar = sum_lm / len(voxel_pathes)
+    print("Avg landmarks...")
+    a_bar = sum_lm / len(voxel_path)
 
     np.save(agv_save_path, a_bar)
 
+    print("Calculating the eigen value and vector...")
     cvm = None
     # cvm
     for a in landmarks_list:
@@ -297,7 +439,7 @@ def get_agv_var4landmarks(voxel_pathes, agv_save_path, eigen_save_path):
         else:
             cvm += cov
 
-    eigenVal, eigenVec = scipy.linalg.eig(cvm / len(landmarks_list))
+    eigenVal, eigenVec = np.linalg.eig(cvm / len(landmarks_list))
 
     # [[ 188.    3.5  35.5  176.5  16.5  33.5 138.5  35.5  25.5 123.5  44.5  28.5
     #   104.   63.   37.   75.5  71.5  53.5  47.5  64.   64.   22.5  44.5  77.5
@@ -325,6 +467,35 @@ def get_agv_var4landmarks(voxel_pathes, agv_save_path, eigen_save_path):
     return a_bar, eigenVal, eigenVec
 
 
+def read_statistic_landmarksinfo(a_bar_dir_path, eig_dir_path):
+    a_bar = np.load(os.path.join(a_bar_dir_path, 'avg.npy'))
+    eigen: np.lib.npyio.NpzFile = np.load(os.path.join(eig_dir_path, 'eig.npz'))
+    return a_bar, eigen['eigenVal'], eigen['eigenVec']
+
+
 def demo():
     pathes = [r'D:\download\labels_clip\0001.nii.gz', r'D:\download\labels_clip\0002.nii.gz']
     a_bar, eigenVal, eigenVec = get_agv_var4landmarks(pathes, "a_bar.npy", "eigen_datas.npz")
+
+
+# '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
+# '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
+def random_shape_sample(voxel_bar_path, voxel_var_mode_path, shape_sample_save_path='.', sample_count=100, var_rate=1):
+    a_bar, eval, evec = read_statistic_landmarksinfo(voxel_bar_path,
+                                                     voxel_var_mode_path)
+    b = 3 * np.sqrt(eval) * var_rate
+    random_shape = np.copy(a_bar)
+    tbar = tqdm.tqdm(range(sample_count), total=sample_count)
+    for j in tbar:
+        for i in range(b.shape[0]):
+            random_b = np.random.normal(0, 1 / 3, size=b.shape)
+            random_b *= b
+            random_shape += random_b[i] * evec[:, i] / 27
+        save_path = os.path.join(shape_sample_save_path, str(time.time_ns()) + '.npy')
+        np.save(save_path, random_shape)
+        tbar.set_postfix_str('saved {}'.format(save_path))
+
+
+if __name__ == '__main__':
+    path = '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
+    random_shape_sample(path, path, '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/shapes', sample_count=10 * 89)

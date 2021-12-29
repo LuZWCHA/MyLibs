@@ -15,30 +15,40 @@ from pydicom import dcmread
 from pydicom.pixel_data_handlers import util
 from typing.io import BinaryIO
 
-from nowandfuture.util import dcm_utils as du, plot, module_util, numpy_util
+from . import dcm_utils as du, plot, module_util, numpy_util
 
 #
-# pylibjpeg pylibjpeg-libjpeg[option] pydicom can only handle Pixel Data that hasn't been compressed these libs can read
-# compressed data
+# pydicom can only handle Pixel Data that hasn't been compressed, these libs( pylibjpeg pylibjpeg-libjpeg[option] ) can read
+# compressed data, install them just using command: pip install; Google to get more information. By nowandfuture.
 #
+
+
+'''
+
+It is a Helper script for Registration and any other medical image pre-process or some CV task.
+Created by nowandfuture.
+
+'''
 
 try:
     import SimpleITK as sitk
 
     sitk_exits = True
-
 except:
     sitk_exits = False
     print('SimpleITK is not imported.')
 
 try:
     import ants
+
+    ants_exits = True
 except:
     ants_exits = False
     print('ants is not imported.')
 
 BACKEND = ['imageio', 'cv2']
 # bmp,jpg,png,tif,gif,pcx,tga,exif,fpx,svg,psd,cdr,pcd,dxf,ufo,eps,ai,raw,WMF,webp == replaced by (,|\[)([a-zA-Z]*) $1'$2'
+# to add more, you can check wiki and opencv lib.
 SUFFIX = ['bmp', 'jpg', 'png', 'tif', 'gif', 'pcx', 'tga', 'exif', 'fpx', 'svg', 'psd', 'cdr', 'pcd', 'dxf', 'ufo',
           'eps', 'ai', 'raw',
           'WMF', 'webp']
@@ -93,7 +103,7 @@ def __load_loader(loader_list):
                 print("Use {} as backend".format(b))
                 break
         except:
-            continue
+            pass
 
     if not check_bk(_img_tool):
         raise RuntimeWarning("No imager Loader loaded, it will cause error when reading IMAGES.")
@@ -395,6 +405,9 @@ def do_reorientation(data_array, init_axcodes, final_axcodes):
     """
     source: https://niftynet.readthedocs.io/en/dev/_modules/niftynet/io/misc_io.html#do_reorientation
     Performs the reorientation (changing order of axes)
+    Help in Chinese:
+        # 轴标签对应为左（L）、右（R）、后（P）、前（A）、下（I）、上（S）。
+        # Example: “右、前、下”（RAI）
 
     :param data_array: 3D Array to reorient
     :param init_axcodes: Initial orientation
@@ -488,7 +501,8 @@ def resample_nd(np_voxel, spacing: tuple = None, new_spacing=(1, 1, 1), interpol
     :param spacing: the spacing of the voxel.
     :param new_spacing: the except spacing.
     :param interpolation: the interpolation.
-    :return: the resampled voxel with :param new_spacing
+    :param new_spacing
+    :return: the resampled voxel with
     """
     spacing = np.array(spacing)
     new_spacing = np.array(new_spacing)
@@ -510,12 +524,16 @@ def resample_nd(np_voxel, spacing: tuple = None, new_spacing=(1, 1, 1), interpol
 
 
 try:
-    import tps
+    from . import tps
 except:
     raise print("No TPS lib installed :)")
 
 
 def resample_nd_by_tps(np_voxel: np.ndarray, ctrl_points, trans_ctrl_points, interpolation='nearest'):
+    """
+    A simple TPS algorithm implement from C++, see {@link tps.py}, this function also use the N-D resample by vx, please see
+    {@link _interpn}
+    """
     trans = tps.TPS(ctrl_points, trans_ctrl_points)
     grid = np.array(_grid(np_voxel))
     shape = grid.shape
@@ -525,6 +543,14 @@ def resample_nd_by_tps(np_voxel: np.ndarray, ctrl_points, trans_ctrl_points, int
 
 
 def resample_nd_by_transform_field(np_voxel: np.ndarray, transformed_loc, interpolation):
+    """
+    Resample N-D data by linear or nearest resample method qucikly use the numpy array without python 'for'
+    But the linear one still has bug when upsample NODE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    :param np_voxel: the data to resample
+    :param transformed_loc: the pxiel-level displacement to warp the data.
+    :param interpolation: the method of interpolation to use, now support nearest and linear.
+    :return: resampled voxel/image/N-D data
+    """
     assert np_voxel.shape == transformed_loc.shape[:-1]
     return _interpn(transformed_loc, np_voxel.shape, np_voxel, np_voxel.shape, interpolation)
 
@@ -686,7 +712,7 @@ def bound_normalized(scans: np.ndarray):
 
 
 # for single channel images
-# for multi channel ones, we need to spilt that at channel dim
+# for multi channel ones, we need to spilt that at the channel dimension
 def statics_mean_std(file_list: List[str], **kwargs):
     vol_var = kwargs.pop('vol_var')
 
@@ -725,7 +751,7 @@ def statics_mean_std(file_list: List[str], **kwargs):
 
     return mean, std, max_val, min_val
 
-
+# the different of this and the above function is that it statistic pixel-level.
 def statistics_mean_std2(file_list: List[str], **kwargs):
     vol_var = kwargs.pop('vol_var')
 
@@ -826,7 +852,7 @@ def bounding_box_shapes_statistics(b_list: List[Dict[float, List[Tuple]]], label
 
 def gt_bounding_box_statistics(gt_path, labels: Tuple[float], file_pattern='*', var_data='vol'):
     """
-    to statics all Ground Truth Voxels that the minimal bounding box to around them. the path should be a DIR of some
+    To statistics all Ground Truth Voxels that the minimal bounding box to around them. the path should be a DIR of some
     voxels formatted of 'nii', 'nii.gz', 'npy', 'npz', 'mgz'
     :param file_pattern: files to statics in the
     :param gt_path
@@ -1051,13 +1077,13 @@ def fusion(datas: List[np.ndarray], mode='cover', src_a=.5, dst_a=.5):
 
 def png2npz2(root, file_path, file_name: str, is_dir: bool, **kwargs):
     """
-    module aggregation's process function
-    :param root:
-    :param file_path:
-    :param file_name:
-    :param is_dir:
-    :param kwargs:
-    :return:
+    module of aggregation's process function, see {@link aggregation.py},
+    :param root: start root folder
+    :param file_path: file_path
+    :param file_name: file_name
+    :param is_dir: is_dir
+    :param kwargs: kwargs
+    :return: npz file
     """
     target_dir = os.path.abspath(kwargs.pop("target_dir"))
     root = os.path.abspath(root)
@@ -1140,7 +1166,7 @@ def sample_patch_by_position(voxel: np.ndarray, sample_start_position: Tuple, sa
 def get_position_by_index(index: int, sample_number_dims: Tuple) -> Tuple:
     # sample plan:
     """
-    For a dataset which sample size is N, each data point will be cropped as M patches, each one is sampled from the
+    For a dataset which sample count is N, each data will be cropped as M patches, each one is sampled from the
     origin voxel at the index of (i, j, k). The upper boundings of i, j, k are I, J, K that M = I * J * K
     Now we have a patches dataset that size is N * M, just traverse it, and get a index 'x' (0 <= x < N * M)
     for x, we get the sample index y = x % N, and to get the actual coordinate we need the upper bounding I, J, K.
@@ -1167,6 +1193,10 @@ def get_position_by_index(index: int, sample_number_dims: Tuple) -> Tuple:
 
 
 def joint_patches(output_data: np.ndarray, patch_stride: Tuple, patches: List[Tuple], skip_dims=2):
+    """
+    Details to see {@link joint_patch}.
+    """
+
     count = None
     for index, patch in patches:
         output_data, count = joint_patch(output_data, patch, patch_stride, index, skip_dims, count)
@@ -1178,6 +1208,20 @@ def joint_patches(output_data: np.ndarray, patch_stride: Tuple, patches: List[Tu
 
 def joint_patch(output_data: np.ndarray, patch: np.ndarray, patch_stride: Tuple, index: int, skip_dims=2,
                 count_data: np.ndarray = None):
+    """
+    The function is to joint patches in order. To joint the patches, we first to create a empty dst numpy array, then fill the pixel into
+    the white room, and use a count matrix (here, we call it count data) to count the pixel[for example, at (x, y, z, ...)] be filled how
+     many times. At last we calculate the avg pixel-level value for all pixels: output data / count data.
+
+    :param output_data: the result of the jpint data.
+    :param patch: one patch to fill in.
+    :param patch_stride: the patch stride
+    :param index: the patch's index
+    :param skip_dims: wheath the dimension to ski, for example the channel or the batchsize dimension
+    :param count_data: the support data struct to save the counts
+    :return: result of jointed voxel/image
+    """
+
     shape_ = output_data.shape
     patch_shape = patch.shape
     assert len(shape_) == len(patch_shape)
