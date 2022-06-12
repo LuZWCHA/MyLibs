@@ -6,7 +6,7 @@ from nipype.interfaces.ants import N4BiasFieldCorrection
 
 try:
     import SimpleITK as sitk
-except ...:
+except Exception as e:
     print('SimpleITK is not here!')
 
 

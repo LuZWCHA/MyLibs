@@ -11,11 +11,76 @@ License: GPLv3
 """
 
 # third party
+from logging import warning
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable  # plotting
+import matplotlib
+
+matplotlib.use('agg')
+
+
+def get_matplotlib_version():
+    try:
+        import matplotlib
+    except Exception as e:
+        return "-1"
+
+    try:
+        version = matplotlib._version.version
+    except Exception as e:
+        version = matplotlib._version.get_versions()['version']
+
+    return version, matplotlib.get_backend()
+
+
+def memory_lack_warning():
+    version_list = ["3.4.2", "3.4.0", "3.4.1", "3.5.1", "3.5.0", ]
+    v, b = get_matplotlib_version()
+    if v in version_list and b != 'agg':
+        warning("The matplotlib's figure has memory lack issues if use none ‘agg’ backend, do not use it at a long-time loop block!")
+
+
+def _recheck():
+    def plot(dat_, i_):
+        fig = plt.figure(figsize=(128, 128), clear=True)
+        plt.close('all')
+
+    for i in range(20):
+        dat = np.random.rand(128, 128)
+
+        plot(dat, i)
+        del dat
+
+
+def check_memoryleak(function_):
+    import tracemalloc, gc
+    tracemalloc.start()
+    current, peak = tracemalloc.get_traced_memory()
+    print("Before: memory usage is {}MB, peak was {}".format(current / 1e6, peak / 1e6))
+    function_()
+    current, peak = tracemalloc.get_traced_memory()
+    print("After(GC Prepared): memory usage is {}MB, peak was {}".format(current / 1e6, peak / 1e6))
+    gc.collect()
+    after, peak = tracemalloc.get_traced_memory()
+    print("After(GC Done): memory usage is {}MB, peak was {}".format(after / 1e6, peak / 1e6))
+    tracemalloc.stop()
+    if (current - after - 0.09) / after < 0.1:
+        warning("This function may be memory leak")
+
+
+memory_lack_warning()
+# check_memoryleak(_recheck)
+
+"""
+The above codes are to detect the memory lack in matploatlib.
+May be remove when the version_list's version is out of date.
+by nowandfuture. 
+
+"""
 
 
 def slices(slices_in,  # the 2D slices
@@ -300,3 +365,89 @@ def plot_3d(image, threshold=-300):
     plt.show()
 
     plt.close()
+
+
+def get_jac_tf(displacement):
+    '''
+    the expected input: displacement of shape(batch, H, W, D, channel),
+    obtained in TensorFlow.
+    '''
+    D_y = (displacement[:, 1:, :-1, :-1, :] - displacement[:, :-1, :-1, :-1, :])
+    D_x = (displacement[:, :-1, 1:, :-1, :] - displacement[:, :-1, :-1, :-1, :])
+    D_z = (displacement[:, :-1, :-1, 1:, :] - displacement[:, :-1, :-1, :-1, :])
+
+    D1 = (D_x[..., 0] + 1) * ((D_y[..., 1] + 1) * (D_z[..., 2] + 1) - D_y[..., 2] * D_z[..., 1])
+    D2 = (D_x[..., 1]) * (D_y[..., 0] * (D_z[..., 2] + 1) - D_y[..., 2] * D_z[..., 0])
+    D3 = (D_x[..., 2]) * (D_y[..., 0] * D_z[..., 1] - (D_y[..., 1] + 1) * D_z[..., 0])
+
+    D = D1 - D2 + D3
+
+    return D
+
+
+def get_jac_pt(displacement):
+    '''
+    the expected input: displacement of shape(batch, channel, H, W, D),
+    obtained in TensorFlow.
+    '''
+    D_y = (displacement[:, :, 1:, :-1, :-1] - displacement[:, :, :-1, :-1, :-1])
+    D_x = (displacement[:, :, :-1, 1:, :-1] - displacement[:, :, :-1, :-1, :-1])
+    D_z = (displacement[:, :, :-1, :-1, 1:] - displacement[:, :, :-1, :-1, :-1])
+
+    D1 = (D_x[:, 0, ...] + 1) * ((D_y[:, 1, ...] + 1) * (D_z[:, 2, ...] + 1) - D_y[:, 2, ...] * D_z[:, 1, ...])
+    D2 = (D_x[:, 1, ...]) * (D_y[:, 0, ...] * (D_z[:, 2, ...] + 1) - D_y[:, 2, ...] * D_z[:, 0, ...])
+    D3 = (D_x[:, 2, ...]) * (D_y[:, 0, ...] * D_z[:, 1, ...] - (D_y[:, 1, ...] + 1) * D_z[:, 0, ...])
+
+    D = D1 - D2 + D3
+
+    return D
+
+
+def get_jac_np(displacement):
+    '''
+    the expected input: displacement of shape(channel, H, W, D),
+    obtained in TensorFlow.
+    '''
+    D_y = (displacement[:, 1:, :-1, :-1] - displacement[:, :-1, :-1, :-1])
+    D_x = (displacement[:, :-1, 1:, :-1] - displacement[:, :-1, :-1, :-1])
+    D_z = (displacement[:, :-1, :-1, 1:] - displacement[:, :-1, :-1, :-1])
+
+    D1 = (D_x[0, ...] + 1) * ((D_y[1, ...] + 1) * (D_z[2, ...] + 1) - D_y[2, ...] * D_z[1, ...])
+    D2 = (D_x[1, ...]) * (D_y[0, ...] * (D_z[2, ...] + 1) - D_y[2, ...] * D_z[0, ...])
+    D3 = (D_x[2, ...]) * (D_y[0, ...] * D_z[1, ...] - (D_y[1, ...] + 1) * D_z[0, ...])
+
+    D = D1 - D2 + D3
+
+    return D
+
+############################ This code is from FAIM ###################################
+
+"""
+Created on Wed Apr 11 10:08:36 2018
+@author: Dongyang
+This script contains some utilize functions for data visualization
+"""
+from matplotlib import colors
+
+
+# ==============================================================================
+# Define a custom colormap for visualiza Jacobian
+# ==============================================================================
+class JacColorNormalize(colors.Normalize):
+    def __init__(self, vmin=None, vmax=None, zero_value=None, one_value=None, clip=False):
+        self.zero_value = zero_value
+        self.one_value = one_value
+        colors.Normalize.__init__(self, vmin, vmax, clip)
+
+    def __call__(self, value, clip=None):
+        # I'm ignoring masked values and all kinds of edge cases to make a
+        # simple example...
+        res = np.sum(value < 0) / (value.shape[0] * value.shape[1])
+        print(res, np.sum(value <= 0))
+
+        value[value < 0] -= 1
+        value += 1
+
+        x, y = [self.vmin - 1, self.zero_value - 1, self.one_value + 1, self.vmax + 1], [1, 0.8, 0.47, 0]
+        res = np.ma.masked_array(np.interp(value, x, y))
+        return res

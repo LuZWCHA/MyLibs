@@ -2,9 +2,10 @@ import glob
 import itertools
 import math
 import os
+import random
 import re
 from operator import itemgetter
-from typing import Union, Optional, List, Tuple, AnyStr, Dict, Any
+from typing import Union, Optional, List, Tuple, AnyStr, Dict, Any, Callable
 
 import PIL
 import numpy as np
@@ -454,7 +455,6 @@ def n4_bias_field_correction_sitk(mr_data, convert_numpy=True):
     inputImage = sitk.Cast(mr_data, sitk.sitkFloat32)
     corrector = sitk.N4BiasFieldCorrectionImageFilter()
     corrector.SetMaximumNumberOfIterations([10] * 4)
-    print(corrector)
     output_mr = corrector.Execute(inputImage, maskImage)
 
     return output_mr if not convert_numpy else convert2numpy(output_mr)[0]
@@ -693,6 +693,32 @@ def resample_ants(image, resample_params, use_voxels=False, interp_type=1):
     return ants.resample_image(image, resample_params, use_voxels=use_voxels, interp_type=interp_type)
 
 
+def center_trans_sitk(voxel_moving: np.ndarray, voxel_fixed: np.ndarray, filled_value=0.0, sitk_inter=None):
+    if not sitk_inter: sitk_inter = sitk.sitkLinear
+    voxel_fixed = sitk.GetImageFromArray(voxel_fixed)
+    voxel_moving = sitk.GetImageFromArray(voxel_moving)
+
+    inital_trans = sitk.CenteredTransformInitializer(voxel_fixed,
+                                                     voxel_moving,
+                                                     sitk.Euler3DTransform(),
+                                                     sitk.CenteredTransformInitializerFilter.GEOMETRY)
+    registration_method = sitk.ImageRegistrationMethod()
+    registration_method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    registration_method.SetMetricSamplingStrategy(registration_method.RANDOM)
+    registration_method.SetMetricSamplingPercentage(0.01)
+    registration_method.SetInterpolator(sitk.sitkLinear)
+
+    registration_method.SetOptimizerAsExhaustive(numberOfSteps=[0, 1, 1, 0, 0, 0], stepLength=np.pi)
+    registration_method.SetOptimizerScales([1, 1, 1, 1, 1, 1])
+
+    registration_method.SetInitialTransform(inital_trans, inPlace=True)
+    registration_method.Execute(voxel_fixed, voxel_moving)
+
+    moved_voxel = sitk.Resample(voxel_moving, voxel_fixed, inital_trans, sitk_inter, filled_value, voxel_moving.GetPixelID())
+
+    return convert2numpy(moved_voxel)[0]
+
+
 # todo for instance normalize, MRI in different organs has different pixel
 def min_max_normalized(scans, mode='MRI', min_bound=-1000, max_bound=3000):
     if mode == 'CT':
@@ -750,6 +776,7 @@ def statics_mean_std(file_list: List[str], **kwargs):
     std = math.sqrt(var_sum / n)  # has bais
 
     return mean, std, max_val, min_val
+
 
 # the different of this and the above function is that it statistic pixel-level.
 def statistics_mean_std2(file_list: List[str], **kwargs):
@@ -980,7 +1007,7 @@ def padding():
 
 
 def center_pad(data, to_size):
-    delta_shape = [j - i for i, j in zip(list(data.shape), to_size)]
+    delta_shape = [max(j - i, 0) for i, j in zip(list(data.shape), to_size)]
     f_pad = [d // 2 for d in delta_shape]
     b_pad = [d - d // 2 for d in delta_shape]
     dim_pad = [(i, j) for i, j in zip(f_pad, b_pad)]
@@ -988,7 +1015,7 @@ def center_pad(data, to_size):
 
 
 def center_crop(data, to_size):
-    delta_shape = [j - i for i, j in zip(to_size, list(data.shape))]
+    delta_shape = [max(j - i, 0) for i, j in zip(to_size, list(data.shape))]
     f_pad = [d // 2 for d in delta_shape]
     b_pad = [d - d // 2 for d in delta_shape]
 
@@ -1103,11 +1130,205 @@ def png2npz2(root, file_path, file_name: str, is_dir: bool, **kwargs):
             write2npz(image, to)
 
 
+class VoxelWalker:
+
+    def __init__(self):
+        self.voxel: np.ndarray = None
+        self.voxel_size: tuple = None
+        self.stride: tuple = None
+        self.patch_size: tuple = (96, 96, 96)
+        self.num = 0
+        self.__len = 0
+        self.walkBounding: tuple = None
+
+    @staticmethod
+    def create(voxel: np.ndarray, voxel_size: Tuple[int], stride: Tuple[int], patch_size: Tuple[int]) -> Any:
+        l, ijk_range = get_patch_number(voxel_size, patch_size, stride)
+        voxelWalker = VoxelWalker()
+
+        voxelWalker.voxel = voxel
+        voxelWalker.__len = l
+        voxelWalker.patch_size = patch_size
+        voxelWalker.stride = stride
+        voxelWalker.walkBounding = ijk_range
+
+        return voxelWalker
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.num >= self.__len:
+            raise StopIteration()
+
+        patch = sample_patch_by_index(self.voxel, self.num, self.patch_size, self.stride, self.walkBounding)
+        self.num += 1
+
+        return patch
+
+    def __len__(self):
+        return self.__len
+
+    def random_sample_patch(self, skip_dims=2):
+        ok, fill_shape = check_patch_cover_rate(self.voxel_size, self.patch_size, self.stride)
+        voxel_size = self.voxel_size
+        voxel = self.voxel
+        if not ok:
+            padding_tuple = [(0, i) for i in fill_shape]
+            voxel = np.pad(self.voxel, tuple(padding_tuple))
+            voxel_size = voxel.shape
+
+        sample_number_per_voxel, sample_number_dims = get_patch_number(voxel_size, self.patch_size, self.stride)
+        index = random.randint(0, sample_number_per_voxel)
+        start = get_position_by_index(index, tuple(sample_number_dims))
+        start = [i * n for i, n in zip(self.stride, start)]
+        end = [i + j for i, j in zip(start, self.patch_size[skip_dims:])]
+        slices = tuple([slice(s, e) for s, e in zip(start, end)])
+        return voxel[slices]
+
+    @staticmethod
+    def random_sample_pathes(voxels: List[np.ndarray], patch_size, stride, index=None, skip_dims=2):
+        voxel_size = voxels[0].shape
+        for vx in voxels:
+            assert voxel_size == vx.shape
+
+        ok, fill_shape = check_patch_cover_rate(voxel_size, patch_size, stride)
+        voxel_size_padding = voxel_size
+        if not ok:
+            voxel_size_padding = tuple([vs + fs for vs, fs in zip(fill_shape, voxel_size)])
+
+        patches = []
+        sample_number_per_voxel, sample_number_dims = get_patch_number(voxel_size_padding, patch_size, stride)
+
+        if not index:
+            index = random.randint(0, sample_number_per_voxel - 1)
+
+        for vx in voxels:
+            voxel = vx
+            if not ok:
+                padding_tuple = [(0, i) for i in fill_shape]
+                voxel = np.pad(vx, tuple(padding_tuple))
+
+            start = get_position_by_index(index, tuple(sample_number_dims))
+            start = [i * n for i, n in zip(stride, start)]
+            end = [i + j for i, j in zip(start, patch_size[skip_dims:])]
+            slices = tuple([slice(s, e) for s, e in zip(start, end)])
+            patches.append(voxel[slices])
+
+        return patches, index
+
+    @staticmethod
+    def registration_pipeline(moving: np.ndarray, fixed: np.ndarray, moving_mask: np.ndarray, fixed_mask: np.ndarray, stride: Tuple[int], patch_size: Tuple[int],
+                              proc_fun: Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], Any],
+                              output: np.ndarray = None,
+                              skip_dims: int = 2):
+
+        assert moving.shape == fixed.shape
+
+        origin_size = moving.shape
+        ok, fill_shape = check_patch_cover_rate(moving.shape, patch_size, stride)
+        if not ok:
+            padding_tuple = [(0, i) for i in fill_shape]
+            moving = np.pad(moving, tuple(padding_tuple))
+            fixed = np.pad(fixed, tuple(padding_tuple))
+            moving_mask = np.pad(moving_mask, tuple(padding_tuple))
+            fixed_mask = np.pad(fixed_mask, tuple(padding_tuple))
+
+        vw_fixed = VoxelWalker.create(fixed, voxel_size=fixed.shape, stride=stride, patch_size=patch_size)
+        vw_moving = VoxelWalker.create(moving, voxel_size=moving.shape, stride=stride, patch_size=patch_size)
+        vw_mmask = VoxelWalker.create(moving_mask, voxel_size=moving.shape, stride=stride, patch_size=patch_size)
+        vw_fmask = VoxelWalker.create(fixed_mask, voxel_size=moving.shape, stride=stride, patch_size=patch_size)
+
+        output = np.zeros_like(moving) if output is None else output
+        label_output = np.zeros_like(moving_mask)
+        count_data = None
+        for idx, patch_moving, patch_fixed, patch_mmask, patch_fmask in enumerate(zip(vw_moving, vw_fixed, vw_mmask, vw_fmask)):
+            patch_moved, patch_moved_mask = proc_fun(patch_moving, patch_fixed, patch_mmask, patch_fmask)
+            output, _ = joint_patch(output_data=output, patch=patch_moved, patch_stride=stride, index=idx, count_data=count_data, skip_dims=skip_dims)
+            label_output, count_data = joint_patch(output_data=output, patch=patch_moved_mask, patch_stride=stride, index=idx, count_data=count_data, skip_dims=skip_dims)
+
+        output = output / count_data
+        label_output = label_output / count_data
+
+        if not ok:
+            slices = []
+            for i in origin_size:
+                slices.append(slice(i))
+
+            output = output[tuple(slices)]
+            label_output = label_output[tuple(slices)]
+
+        return output, label_output
+
+    @staticmethod
+    def registration_pipeline(moving: np.ndarray, fixed: np.ndarray, stride: Tuple[int], patch_size: Tuple[int], proc_fun: Callable[[np.ndarray, np.ndarray], np.ndarray],
+                              out_put: np.ndarray = None,
+                              skip_dims: int = 2):
+
+        assert moving.shape == fixed.shape
+
+        origin_size = moving.shape
+        ok, fill_shape = check_patch_cover_rate(moving.shape, patch_size, stride)
+        if not ok:
+            padding_tuple = [(0, i) for i in fill_shape]
+            moving = np.pad(moving, tuple(padding_tuple))
+            fixed = np.pad(fixed, tuple(padding_tuple))
+
+        vw_fixed = VoxelWalker.create(fixed, voxel_size=fixed.shape, stride=stride, patch_size=patch_size)
+        vw_moving = VoxelWalker.create(moving, voxel_size=moving.shape, stride=stride, patch_size=patch_size)
+
+        out_put = np.zeros_like(moving) if out_put is None else out_put
+        count_data = None
+        for idx, patch_moving, patch_fixed in enumerate(zip(vw_moving, vw_fixed)):
+            patch = proc_fun(patch_moving, patch_fixed)
+            out_put, count_data = joint_patch(output_data=out_put, patch=patch, patch_stride=stride, index=idx, count_data=count_data, skip_dims=skip_dims)
+
+        out_put = out_put / count_data
+
+        if not ok:
+            slices = []
+            for i in origin_size:
+                slices.append(slice(i))
+
+            out_put = out_put[tuple(slices)]
+
+        return out_put
+
+    @staticmethod
+    def pipeline(voxel: np.ndarray, stride: Tuple[int], patch_size: Tuple[int], proc_fun: Callable[[np.ndarray], np.ndarray], out_put: np.ndarray = None,
+                 skip_dims: int = 2) -> np.ndarray:
+
+        origin_size = voxel.shape
+        ok, fill_shape = check_patch_cover_rate(voxel.shape, patch_size, stride)
+        if not ok:
+            padding_tuple = [(0, i) for i in fill_shape]
+            voxel = np.pad(voxel, tuple(padding_tuple))
+
+        vw = VoxelWalker.create(voxel, voxel_size=voxel.shape, stride=stride, patch_size=patch_size)
+
+        out_put = np.zeros_like(voxel) if out_put is None else out_put
+        count_data = None
+        for idx, patch in enumerate(vw):
+            patch = proc_fun(patch)
+            out_put, count_data = joint_patch(output_data=out_put, patch=patch, patch_stride=stride, index=idx, count_data=count_data, skip_dims=skip_dims)
+
+        out_put = out_put / count_data
+
+        if not ok:
+            slices = []
+            for i in origin_size:
+                slices.append(slice(i))
+
+            out_put = out_put[tuple(slices)]
+
+        return out_put
+
+
 def make_patches_3d(voxel: np.ndarray, size_: Tuple, stride, save_dir, post_fix='.patch', random_sample=False):
     shape_ = voxel.shape
-    sample_size = size_
+    patch_size = size_
 
-    assert len(sample_size) == 3 and len(shape_) in [3, 4]
+    assert len(patch_size) == 3 and len(shape_) in [3, 4]
 
     _, (x_step, y_step, z_step) = get_patch_number(voxel, shape_, stride)
 
@@ -1119,11 +1340,11 @@ def make_patches_3d(voxel: np.ndarray, size_: Tuple, stride, save_dir, post_fix=
                     start_y = y * stride[1]
                     start_z = z * stride[2]
                     if len(shape_) == 4:
-                        patch = voxel[:, start_x: start_x + sample_size[0], start_y: start_y + sample_size[1],
-                                start_z: start_z + sample_size[2]]
+                        patch = voxel[:, start_x: start_x + patch_size[0], start_y: start_y + patch_size[1],
+                                start_z: start_z + patch_size[2]]
                     else:
-                        patch = voxel[start_x: start_x + sample_size[0], start_y: start_y + sample_size[1],
-                                start_z: start_z + sample_size[2]]
+                        patch = voxel[start_x: start_x + patch_size[0], start_y: start_y + patch_size[1],
+                                start_z: start_z + patch_size[2]]
 
                     if patch:
                         write2nii(patch, os.path.join(save_dir, '_{}_{}_{}{}'.format(x, y, z, post_fix)))
@@ -1131,9 +1352,26 @@ def make_patches_3d(voxel: np.ndarray, size_: Tuple, stride, save_dir, post_fix=
         pass
 
 
+def check_patch_cover_rate(shape: Tuple[int], patch_shape: Tuple[int], patch_stride: Tuple[int]):
+    assert len(shape) == len(patch_stride) == len(patch_shape)
+    flag = True
+    ret = []
+    for i in range(len(shape)):
+        rest_ = (shape[i] - patch_shape[i]) % patch_stride[i]
+        step = (shape[i] - patch_shape[i]) // patch_stride[i]
+
+        if rest_ > 0:
+            flag = False
+            step += 1
+            rest_ = step * patch_stride[i] + patch_shape[i] - shape[i]
+
+        ret.append(rest_)
+
+    return flag, ret
+
+
 def get_patch_number(voxel_shape, patch_shape: Tuple, patch_stride: Tuple):
     shape_ = voxel_shape
-
     shape_ = [(shape_[i] - patch_shape[i]) // patch_stride[i] + 1 for i in range(len(shape_))]
     total_size = 1
     for i in shape_:
@@ -1141,24 +1379,25 @@ def get_patch_number(voxel_shape, patch_shape: Tuple, patch_stride: Tuple):
     return total_size, shape_
 
 
-def sample_patch_by_index(voxel: np.ndarray, index, sample_size: Tuple, sample_stride: Tuple,
-                          sample_number_dims: Tuple):
+def sample_patch_by_index(voxel: np.ndarray, index, patch_size: Tuple, patch_stride: Tuple, sample_number_dims: Tuple):
     res = get_position_by_index(index, sample_number_dims)
-    assert res and len(res) == len(sample_stride)
-    res = [i * n for i, n in zip(res, sample_stride)]
-    return sample_patch_by_position(voxel, tuple(res), sample_size)
+    assert res and len(res) == len(patch_stride)
+    res = [i * n for i, n in zip(res, patch_stride)]
+    return sample_patch_by_position(voxel, tuple(res), patch_size)
 
 
-def sample_patch_by_position(voxel: np.ndarray, sample_start_position: Tuple, sample_size: Tuple):
-    end = [i + j for i, j in zip(sample_start_position, sample_size)]
-    slices = tuple([slice(s, e) for s, e in zip(sample_start_position, end)])
+def sample_patch_by_position(voxel: np.ndarray, patch_start_position: Tuple, patch_size: Tuple):
+    end = [i + j for i, j in zip(patch_start_position, patch_size)]
+    slices = tuple([slice(s, e) for s, e in zip(patch_start_position, end)])
 
-    start_x, start_y, start_z = sample_start_position
     shape_ = voxel.shape
-    skip_slices = len(voxel.shape) - len(sample_size)
+    skip_slices = len(voxel.shape) - len(patch_size)
     assert skip_slices >= 0
 
-    patch = voxel[skip_slices * (slice(None),), slices]
+    if skip_slices > 0:
+        patch = voxel[skip_slices * (slice(None),), slices]
+    else:
+        patch = voxel[slices]
 
     return patch
 
@@ -1167,7 +1406,7 @@ def get_position_by_index(index: int, sample_number_dims: Tuple) -> Tuple:
     # sample plan:
     """
     For a dataset which sample count is N, each data will be cropped as M patches, each one is sampled from the
-    origin voxel at the index of (i, j, k). The upper boundings of i, j, k are I, J, K that M = I * J * K
+    origin voxel at the index of (i, j, k). The up boundings of i, j, k are I, J, K that M = I * J * K
     Now we have a patches dataset that size is N * M, just traverse it, and get a index 'x' (0 <= x < N * M)
     for x, we get the sample index y = x % N, and to get the actual coordinate we need the upper bounding I, J, K.
     """
@@ -1210,14 +1449,14 @@ def joint_patch(output_data: np.ndarray, patch: np.ndarray, patch_stride: Tuple,
                 count_data: np.ndarray = None):
     """
     The function is to joint patches in order. To joint the patches, we first to create a empty dst numpy array, then fill the pixel into
-    the white room, and use a count matrix (here, we call it count data) to count the pixel[for example, at (x, y, z, ...)] be filled how
+    the void space, and use a count matrix (here, we named count data) to count the pixel[for example, at (x, y, z, ...)] be filled how
      many times. At last we calculate the avg pixel-level value for all pixels: output data / count data.
 
-    :param output_data: the result of the jpint data.
+    :param output_data: the result of the jointed data.
     :param patch: one patch to fill in.
     :param patch_stride: the patch stride
     :param index: the patch's index
-    :param skip_dims: wheath the dimension to ski, for example the channel or the batchsize dimension
+    :param skip_dims: whether the dimension to be skipped, for example, the channel or the batch_size dimension
     :param count_data: the support data struct to save the counts
     :return: result of jointed voxel/image
     """
@@ -1240,13 +1479,20 @@ def joint_patch(output_data: np.ndarray, patch: np.ndarray, patch_stride: Tuple,
     output_data[slices] += patch[skip_slices]
     return output_data, count_data
 
-# if __name__ == '__main__':
-#     a = np.zeros((2, 2, 5, 5))
-#     b = np.random.rand(2, 2, 2, 3)
-#
-#     patches = []
-#     for i in range(4 * 3):
-#         patches.append((i, b))
-#
-#     output_, count = joint_patches(a, (1, 1), patches)
-#     print(output_, count)
+
+def clip_percent(data: np.ndarray, percent: float):
+    min_ = np.percentile(data, 100 - percent)
+    max_ = np.percentile(data, percent)
+    return np.clip(data, min_, max_)
+
+
+if __name__ == '__main__':
+    a = np.zeros((2, 2, 5, 5))
+    b = np.random.rand(2, 2, 2, 3)
+
+    patches = []
+    for i in range(4 * 3):
+        patches.append((i, b))
+
+    output_, count = joint_patches(a, (1, 1), patches)
+    print(output_, count)

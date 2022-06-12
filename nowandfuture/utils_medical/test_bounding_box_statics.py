@@ -1,9 +1,9 @@
 import glob
 import os
 
-from nowandfuture.util import plot
-from nowandfuture.util.preproccess import n4_bias_field_correction_sitk as n4b
-import nowandfuture.util.preproccess as prp
+from nowandfuture.utils_medical import plot
+from nowandfuture.utils_medical.preproccess import n4_bias_field_correction_sitk as n4b
+import nowandfuture.utils_medical.preproccess as prp
 import numpy as np
 
 # path = 'data'
@@ -18,7 +18,7 @@ import numpy as np
 # print(res.shape)
 # plot.slices([org_image, res], cmaps=['gray'])
 
-import nowandfuture.util.aggregation as agg
+import nowandfuture.utils_medical.aggregation as agg
 
 path = r'G:\腹部数据'
 to = r'G:\Processed Images'

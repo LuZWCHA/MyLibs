@@ -1,15 +1,13 @@
 import os
 import queue
 import time
-from typing import List
+from queue import PriorityQueue as pq
 
 import numpy as np
-import scipy
 from scipy import ndimage
 
-import nowandfuture.util.preproccess as prp
+import nowandfuture.utils_medical.preproccess as prp
 from nowandfuture.surface_distance import lookup_tables
-from queue import PriorityQueue as pq
 
 """
 This file is designed to find the landmarks for pancreas' gt mask only.
@@ -18,7 +16,7 @@ Author: nowandfuture
 """
 
 
-# A start
+# A star
 def find_nearest_path_A_star(data, start_point, stop_point):
     def fun(_cur_point, target_point):
         return abs(_cur_point[0] - target_point[0]) + abs(_cur_point[1] - target_point[1]) + abs(_cur_point[2] - target_point[2])
@@ -89,6 +87,7 @@ def find_nearest_path_A_star(data, start_point, stop_point):
     return path
 
 
+# BFS
 def find_nearest_path(data, start_point, stop_point):
     def is_valid(point, shape):
         for i, limit in zip(tuple(point), shape):
@@ -345,7 +344,6 @@ def get_landmarks(data, segment_count=8, recolored_file_path=None):
 
 import tqdm
 import multiprocessing.pool as pool
-import multiprocessing.queues as async_queue
 
 
 def wrap_find_landmarks(p):
@@ -474,23 +472,24 @@ def read_statistic_landmarksinfo(a_bar_dir_path, eig_dir_path):
 
 
 def demo():
-    pathes = [r'D:\download\labels_clip\0001.nii.gz', r'D:\download\labels_clip\0002.nii.gz']
+    pathes = [r'path\to\your\file1.nii.gz', r'path\to\your\file2.nii.gz']
     a_bar, eigenVal, eigenVec = get_agv_var4landmarks(pathes, "a_bar.npy", "eigen_datas.npz")
 
 
 # '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
 # '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
-def random_shape_sample(voxel_bar_path, voxel_var_mode_path, shape_sample_save_path='.', sample_count=100, var_rate=1):
+def random_shape_sample(voxel_bar_path, voxel_var_mode_path, shape_sample_save_path='.', sample_count=100, var_rate=1.0):
     a_bar, eval, evec = read_statistic_landmarksinfo(voxel_bar_path,
                                                      voxel_var_mode_path)
     b = 3 * np.sqrt(eval) * var_rate
-    random_shape = np.copy(a_bar)
     tbar = tqdm.tqdm(range(sample_count), total=sample_count)
-    for j in tbar:
+    for _ in tbar:
+        random_shape = np.copy(a_bar)
         for i in range(b.shape[0]):
-            random_b = np.random.normal(0, 1 / 3, size=b.shape)
+            random_b = np.random.normal(0, 1, size=b.shape) / 3
             random_b *= b
-            random_shape += random_b[i] * evec[:, i] / 27
+            random_b = np.clip(random_b, -b * var_rate, b * var_rate)
+            random_shape += random_b[i] * evec[:, i] / b.shape[0]
         save_path = os.path.join(shape_sample_save_path, str(time.time_ns()) + '.npy')
         np.save(save_path, random_shape)
         tbar.set_postfix_str('saved {}'.format(save_path))
@@ -498,4 +497,4 @@ def random_shape_sample(voxel_bar_path, voxel_var_mode_path, shape_sample_save_p
 
 if __name__ == '__main__':
     path = '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/labels'
-    random_shape_sample(path, path, '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/shapes', sample_count=10 * 89)
+    random_shape_sample(path, path, '/media/kevin/870A38D039F26F71/PycharmProjects/MRRNet/datasets/MLT/cropped/shapes', sample_count=10 * 89, var_rate=0.33)

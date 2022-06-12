@@ -45,8 +45,14 @@ def load_scan(path):
     return slices
 
 
-# mri
 def get_pixels_hu(slices, background=-2000):
+    """
+    To do: from network
+    :param slices:
+    :param background:
+    :return:
+    """
+
     image = np.stack([s.pixel_array for s in slices])
     # Convert to int16 (from sometimes int16),
     # should be possible as values should always be low enough (<32k)
