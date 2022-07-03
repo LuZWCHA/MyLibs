@@ -732,7 +732,7 @@ def min_max_normalized(scans, mode='MRI', min_bound=-1000, max_bound=3000):
 def bound_normalized(scans: np.ndarray):
     min_bound = scans.min()
     max_bound = scans.max()
-    scans = (scans - min_bound) / (max_bound - min_bound + np.e)
+    scans = (scans - min_bound) / (max_bound - min_bound + 1e-7)
 
     return scans
 
@@ -1485,14 +1485,3 @@ def clip_percent(data: np.ndarray, percent: float):
     max_ = np.percentile(data, percent)
     return np.clip(data, min_, max_)
 
-
-if __name__ == '__main__':
-    a = np.zeros((2, 2, 5, 5))
-    b = np.random.rand(2, 2, 2, 3)
-
-    patches = []
-    for i in range(4 * 3):
-        patches.append((i, b))
-
-    output_, count = joint_patches(a, (1, 1), patches)
-    print(output_, count)

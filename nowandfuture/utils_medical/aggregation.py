@@ -5,12 +5,14 @@ import multiprocessing
 import time
 import os
 import os.path
+from typing import List, Callable, Dict, Any
 
-def func_callback(func1, **kwargs):
+
+def func_callback(func1: Callable[[str, str, str, bool, Dict[str, Any]], None], **kwargs):
     func1(**kwargs)
 
 
-def test(root, file_path, file_name: str, is_dir: bool, **kwargs):
+def test(root: str, file_path: str, file_name: str, is_dir: bool, **kwargs):
     target_dir = kwargs.pop("target_dir")
     filter_tuple = kwargs.pop("filter_tuple")
     target = kwargs.pop("target")
@@ -20,7 +22,7 @@ def test(root, file_path, file_name: str, is_dir: bool, **kwargs):
     time.sleep(0.1)
 
 
-def consumer_end(root, file_path, file_name: str, is_dir: bool, **kwargs):
+def consumer_end(root: str, file_path, file_name: str, is_dir: bool, **kwargs):
     target_dir = kwargs.pop("target_dir")
     filter_tuple = kwargs.pop("filter_tuple")
     target = kwargs.pop("target")
@@ -34,7 +36,7 @@ def consumer_end(root, file_path, file_name: str, is_dir: bool, **kwargs):
             shutil.copyfile(file_path, target_dir + os.sep + file_name)
 
 
-def consumer_re(root, file_path, file_name: str, is_dir: bool, **kwargs):
+def consumer_re(root: str, file_path: str, file_name: str, is_dir: bool, **kwargs):
     target_dir = kwargs.pop("target_dir")
     pattern = kwargs.pop("pattern")
     target = kwargs.pop("target")
@@ -48,7 +50,7 @@ def consumer_re(root, file_path, file_name: str, is_dir: bool, **kwargs):
             shutil.copyfile(file_path, os.path.join(target_dir, file_name))
 
 
-def consumer_re_all(root, file_path, file_name: str, is_dir: bool, **kwargs):
+def consumer_re_all(root: str, file_path: str, file_name: str, is_dir: bool, **kwargs):
     target_dir = kwargs.pop("target_dir")
 
     if not os.path.exists(target_dir):
@@ -107,11 +109,11 @@ def delete_files_match_from(_from: str, pattern=r'.*', target="name"):
     Traverse().traverse_files(_from, func=consumer_re_d, target=target, pattern=pattern)
 
 
-def process_files_match_from_to(_from: str, _to: str, func: func_callback, pattern=r'.*', filter_tuple=(), target='name'):
+def process_files_match_from_to(_from: str, _to: str, func: Callable[[str, str, str, bool, Dict[str, Any]], None], pattern=r'.*', filter_tuple=(), target='name'):
     Traverse().traverse_files(_from, func=func, target_dir=_to, pattern=pattern, filter_tuple=filter_tuple, target=target)
 
 
-def process_dirs_match_from_to(_from: str, _to: str, func: func_callback, pattern=r'.*', filter_tuple=(), target='name'):
+def process_dirs_match_from_to(_from: str, _to: str, func: Callable[[str, str, str, bool, Dict[str, Any]], None], pattern=r'.*', filter_tuple=(), target='name'):
     Traverse().traverse_files(_from, func=func, target_dir=_to, pattern=pattern, filter_tuple=filter_tuple, target=target)
 
 
@@ -121,12 +123,22 @@ def group(group_list, func):
         func(root, file_path, file_name, is_dir, **kwargs)
 
 
-def async_process(_from: str, _to: str, func: func_callback, pattern=r'.*', filter_tuple=(), target='name', pool=None):
+def async_process(_from: str, _to: str, func: Callable[[str, str, str, bool, Dict[str, Any]], None], pattern=r'.*', filter_tuple=(), target='name', pool=None) -> None:
+    """
+    Process the files async
+    :param _from: The files to process
+    :param _to: The files to save after processing
+    :param func: The callback function, for example: foo(root: str, file_path: str, file_name: str, is_dir: bool, **kwargs)
+    :param pattern: The pattern to match
+    :param filter_tuple: white filters
+    :param target: The file name or the file path to feed to callback function
+    :param pool: The process pool
+    """
     group_size = 20
     if not pool:
         pool = multiprocessing.Pool(multiprocessing.cpu_count() - 1)
 
-    count, par_list =\
+    count, par_list = \
         Traverse().traverse_files_async(_from, func=func, target_dir=_to, pattern=pattern, filter_tuple=filter_tuple, target=target)
 
     start = time.time()
@@ -152,7 +164,7 @@ def async_process(_from: str, _to: str, func: func_callback, pattern=r'.*', filt
 
 class Traverse:
 
-    def traverse_files(self, root, work_dir=None, func: func_callback = None, **kwargs):
+    def traverse_files(self, root, work_dir=None, func: Callable[[str, str, str, bool, Dict[str, Any]], None] = None, **kwargs):
         count = 1
 
         if work_dir is None:
@@ -170,7 +182,7 @@ class Traverse:
                 continue
         return count
 
-    def traverse_files_async(self, root, work_dir=None, func: func_callback = None, **kwargs):
+    def traverse_files_async(self, root, work_dir=None, func: Callable[[str, str, str, bool, Dict[str, Any]], None] = None, **kwargs):
         count = 1
         func_list = []
 
