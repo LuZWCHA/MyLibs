@@ -1,9 +1,11 @@
+import datetime
 import glob
 import itertools
 import math
 import os
 import random
 import re
+import time
 from operator import itemgetter
 from typing import Union, Optional, List, Tuple, AnyStr, Dict, Any, Callable
 
@@ -14,8 +16,10 @@ from matplotlib import figure
 from pydicom import dataset, dicomdir
 from pydicom import dcmread
 from pydicom.pixel_data_handlers import util
+from scipy import signal
 from typing.io import BinaryIO
 
+import data
 from . import dcm_utils as du, plot, module_util, numpy_util
 
 #
@@ -544,19 +548,32 @@ def resample_nd_by_tps(np_voxel: np.ndarray, ctrl_points, trans_ctrl_points, int
 
 def resample_nd_by_transform_field(np_voxel: np.ndarray, transformed_loc, interpolation):
     """
-    Resample N-D data by linear or nearest resample method qucikly use the numpy array without python 'for'
-    But the linear one still has bug when upsample NODE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    Resample N-D data by linear or nearest resample method qucikly use the numpy array without python loop
     :param np_voxel: the data to resample
     :param transformed_loc: the pxiel-level displacement to warp the data.
     :param interpolation: the method of interpolation to use, now support nearest and linear.
     :return: resampled voxel/image/N-D data
     """
-    assert np_voxel.shape == transformed_loc.shape[:-1]
+    assert np.prod(np_voxel.shape) == transformed_loc.shape[:-1]
     return _interpn(transformed_loc, np_voxel.shape, np_voxel, np_voxel.shape, interpolation)
 
 
 def _interpn(loc, org_size, vox, new_shape, interpolation):
+    """
+    Interpolation (by linear or nearest method) by numpy, the codes stucture is similar with voxelmorph.
+    Some codes is obtained from voxelmorph, and fixed the CPU floating point precision error.
+    :param loc: the relative position of the voxel's pixels
+    :param org_size: the orginal size of voxel.
+    :param vox: the reshaped voxel.
+    :param new_shape: the voxel to be resized.
+    :param interpolation: interpolation.
+    :return: resized or distort voxel.
+    """
+
     def prod_n(lst):
+        """
+        Alternative to tf.stacking and prod, since tf.stacking can be slow
+        """
         prod = lst[0]
         for p in lst[1:]:
             prod *= p
@@ -578,7 +595,7 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
         return ndx
 
     interp_vol = 0
-    loc = loc.astype(np.float64)
+    loc = loc.astype(np.float32)
     # second order or first order
     if interpolation == 'linear':
         nb_dims = len(org_size)
@@ -593,7 +610,6 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
         loc1 = [np.clip(loc0lst[d] + 1, 0, max_loc[d]) for d in range(nb_dims)]
         locs = [[f.astype(np.int32) for f in loc0lst], [f.astype(np.int32) for f in loc1]]
 
-        #
         # compute the difference between the upper value and the original value
         # differences are basically 1 - (pt - floor(pt))
         #   because: floor(pt) + 1 - pt = 1 + (floor(pt) - pt) = 1 - (pt - floor(pt))
@@ -606,7 +622,7 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
         # e.g. [0, 0] means this "first" corner in a 2-D "cube"
         cube_pts = list(itertools.product([0, 1], repeat=nb_dims))
         interp_vol = 0
-        vox_reshaped = np.reshape(vox, (-1, org_size[-1]))
+        vox_reshaped = vox.reshape((-1,))
         for c in cube_pts:
             # get nd values
             # note re: indices above volumes via https://github.com/tensorflow/tensorflow/issues/15091
@@ -625,7 +641,9 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
             # get the weight of this cube_pt based on the distance
             # if c[d] is 0 --> want weight = 1 - (pt - floor[pt]) = diff_loc1
             # if c[d] is 1 --> want weight = pt - floor[pt] = diff_loc0
-            wts_lst = [weights_loc[c[d]][d] for d in range(nb_dims)]
+
+            # fixed CPU float precision error by simply np.abs(weights_loc)
+            wts_lst = [np.abs(weights_loc[c[d]][d]) for d in range(nb_dims)]
             # tf stacking is slow, we we will use prod_n()
             # wlm = tf.stack(wts_lst, axis=0)
             # wt = tf.reduce_prod(wlm, axis=0)
@@ -1485,3 +1503,222 @@ def clip_percent(data: np.ndarray, percent: float):
     max_ = np.percentile(data, percent)
     return np.clip(data, min_, max_)
 
+
+def statistic_histogram(images: List[str], labels: List[str] = None, label_vals=None, percent=5, offset=1e4, bg=0, report_csv=None):
+    def create_report_bins(file_path, label_value, bins, scale, min_, mode='a'):
+        import csv
+        name_ = os.path.basename(file_path)
+        dir_ = os.path.dirname(file_path)
+        with open(os.path.join(dir_, f"label_{label_value}_{name_}"), mode=mode) as f:
+            csv_writer = csv.writer(f)
+            from datetime import date
+            csv_writer.writerow(["record_time", time.ctime()])
+            csv_writer.writerow(["min", min_])
+            for idx, i in enumerate(bins):
+                csv_writer.writerow([min_ + idx, i])
+            csv_writer.writerow(["scale", scale])
+
+    assert isinstance(percent, int) and 0 <= percent <= 100
+
+    tqdm_exit = False
+    try:
+        import tqdm
+        tqdm_exit = True
+    except Exception as e:
+        pass
+
+    datas = [images]
+
+    if labels is not None:
+        datas += [labels]
+
+    if tqdm_exit:
+        datas = tqdm.tqdm(zip(*datas), total=len(datas[0]))
+        datas.set_description_str("statistic histogram")
+    else:
+        print("statistic histogram...")
+
+    bins_res = {}
+    len_bins = {}
+    scale = {}
+    f_i = {}
+    b_i = {}
+    min_ = {}
+
+    for data_ in datas:
+        file_name = os.path.basename(data_[0])
+        datas.set_postfix_str(file_name)
+        if not tqdm_exit:
+            print(file_name)
+
+        label = None
+        image = read_one_voxel(data_[0]) + offset
+        if labels:
+            label = read_one_voxel(data_[1])
+        else:
+            label = np.zeros_like(image)
+            label_vals = [0]
+
+        if label_vals is None:
+            label_vals = list(np.unique(label))
+            if bg is not None and bg in label_vals:
+                label_vals.remove(bg)
+
+        if not len(bins_res):
+            for lv in label_vals:
+                bins_res[lv] = 0
+                scale[lv] = 1
+                len_bins[lv] = 0
+                min_[lv] = 1e10
+
+        for lv in label_vals:
+            target = image[label == lv]
+            target = target.astype(np.int64)
+            min_[lv] = int(min(min_[lv], target.min()))
+            res = np.bincount(target)
+            if lv in len_bins:
+                len_bins[lv] = max(len_bins[lv], res.shape[0])
+
+                if res.shape[0] < len_bins[lv]:
+                    res = np.pad(res, (0, len_bins[lv] - res.shape[0]))
+                elif isinstance(bins_res[lv], np.ndarray) and bins_res[lv].shape[0] < len_bins[lv]:
+                    bins_res[lv] = np.pad(bins_res[lv], (0, len_bins[lv] - bins_res[lv].shape[0]))
+
+            bins_res[lv] += res
+
+    if tqdm_exit:
+        datas.set_description_str(f"statistic {percent}% values...")
+        datas.refresh()
+
+    MAX_ = 1 << 64
+    for lv in label_vals:
+
+        bins_res[lv] = bins_res[lv][min_[lv]:]
+        size_ = len(bins_res[lv])
+
+        # avoid overflow
+        while bins_res[lv].max() > MAX_ / size_:
+            bins_res[lv] //= 2
+            scale[lv] *= 2
+
+        sum_ = bins_res[lv].sum()
+        remove_num = sum_ * (percent / 100)
+        s = 0
+        f_i[lv] = 0
+        bins_res[lv] = list(bins_res[lv])
+        b_i[lv] = size_ - 1
+
+        for idx, i in enumerate(bins_res[lv]):
+            s += i
+            if s > remove_num:
+                f_i[lv] = idx
+                break
+        s = 0
+        for idx, i in enumerate(reversed(bins_res[lv])):
+            s += i
+            if s > remove_num:
+                b_i[lv] = size_ - idx
+                break
+
+        if report_csv:
+            create_report_bins(report_csv, lv, bins_res[lv], scale[lv], min_[lv] - offset, mode='a')
+    if tqdm_exit:
+        datas.set_description_str(f"done.")
+        datas.refresh()
+
+    return bins_res, scale, f_i, b_i
+
+
+def gauss_kernel(kernel_size, channels, sigma=(1, 1, 1)):
+    kernel: np.ndarray = 1
+    meshgrids = np.meshgrid(
+        *[
+            np.arange(size, dtype=np.float32)
+            for size in kernel_size
+        ]
+    )
+
+    for size, std, mgrid in zip(kernel_size, sigma, meshgrids):
+        mean = (size - 1) / 2
+        kernel *= 1 / (std * math.sqrt(2 * math.pi)) * np.exp(-((mgrid - mean) / std) ** 2 / 2)
+
+    kernel /= np.sum(kernel)
+
+    kernel = kernel.reshape(*kernel.shape)
+    # kernel = kernel.repeat(channels)
+    return kernel
+
+
+def elastic_transform_random_multi_channel(datas: list, interpolations=None, kernel_size=9, scale=1, sigma=3, filter=None):
+    """
+    Input data list has to be a list contains numpy array that size of (X_0, X_1, ..., X_n, Dim_channel)
+    :rtype: tuple (numpy.ndarray, numpy.ndarray)
+    """
+    assert len(datas) > 0 and kernel_size > 0
+
+    if interpolations is None:
+        interpolations = ['linear'] + (['nearest'] * (len(datas) - 1))
+    else:
+        if isinstance(interpolations, list):
+            assert len(interpolations) == len(datas)
+        elif isinstance(interpolations, str) and interpolations in ['nearest', 'linear']:
+            interpolations = [interpolations] * len(datas)
+
+    res = []
+    for idx, data in enumerate(datas):
+        channels = data.shape[-1]
+        data_chn = [data[..., c] for c in range(channels)]
+        data_chn, dsm = elastic_transform_random_one_channel(data_chn, interpolations=interpolations[idx], kernel_size=kernel_size, scale=scale, sigma=sigma, filter=filter)
+        res.append(np.stack(data_chn, -1))
+
+    return res, dsm
+
+def elastic_transform_random_one_channel(datas: list, interpolations = None, kernel_size=9, scale=1, sigma=3, filter=None):
+    def random_displacement(shape_, a):
+        grids = _grid2(shape_)
+        f = filter if filter is not None else default_filter
+
+        dsm = [f((np.random.rand(*list(shape_)) - 0.5) * 2 * a, kernel_size=kernel_size, sigma=sigma) for g in grids]
+        grids_ = [g + d for g, d in zip(grids, dsm)]
+
+        grid = np.array(grids_)
+        dsm = np.array(dsm)
+        shape = grid.shape
+        location_list = grid.reshape(shape[0], -1).transpose()
+        return location_list, dsm.reshape(shape[0], -1).transpose()
+
+    def default_filter(voxel, sigma=3, kernel_size=9):
+        dim_ = voxel.ndim
+        kernel = gauss_kernel(kernel_size=(kernel_size,) * dim_, channels=1, sigma=(sigma,) * dim_)
+        # kernel = np.ones((kernel_size,) * dim_) / kernel_size ** dim_
+        res = signal.convolve(voxel, kernel, mode='same')
+        return res
+
+    def smooth_displacement(shape_, a):
+        random_dsp = random_displacement(*list(shape_), a)
+        smooth_dsp = []
+        for dsp in random_dsp:
+            smooth_dsp.append(filter(dsp))
+
+        return smooth_dsp
+
+    assert len(datas) > 0 and kernel_size > 0
+
+    if interpolations is None:
+        interpolations = ['linear'] + (['nearest'] * (len(datas) - 1))
+    else:
+        if isinstance(interpolations, list):
+            assert len(interpolations) == len(datas)
+        elif isinstance(interpolations, str) and interpolations in ['nearest', 'linear']:
+            interpolations = [interpolations] * len(datas)
+
+    results = []
+    dsm = None
+    for idx, data in enumerate(datas):
+        if dsm is None:
+            smdsp, dsm = random_displacement(data.shape, scale)
+
+        data = resample_nd_by_transform_field(data, smdsp, interpolation=interpolations[idx])
+        results.append(data)
+
+    return tuple(results), dsm.reshape(*data.shape, data.ndim)

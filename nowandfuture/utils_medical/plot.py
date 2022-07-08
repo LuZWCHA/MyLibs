@@ -20,8 +20,9 @@ from matplotlib.colors import Normalize
 from mpl_toolkits.axes_grid1 import make_axes_locatable  # plotting
 import matplotlib
 
-matplotlib.use('agg')
 
+def useAgg():
+    matplotlib.use('agg')
 
 def get_matplotlib_version():
     try:
