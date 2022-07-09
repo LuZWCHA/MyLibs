@@ -24,6 +24,7 @@ import matplotlib
 def useAgg():
     matplotlib.use('agg')
 
+
 def get_matplotlib_version():
     try:
         import matplotlib
@@ -55,22 +56,6 @@ def _recheck():
 
         plot(dat, i)
         del dat
-
-
-def check_memoryleak(function_):
-    import tracemalloc, gc
-    tracemalloc.start()
-    current, peak = tracemalloc.get_traced_memory()
-    print("Before: memory usage is {}MB, peak was {}".format(current / 1e6, peak / 1e6))
-    function_()
-    current, peak = tracemalloc.get_traced_memory()
-    print("After(GC Prepared): memory usage is {}MB, peak was {}".format(current / 1e6, peak / 1e6))
-    gc.collect()
-    after, peak = tracemalloc.get_traced_memory()
-    print("After(GC Done): memory usage is {}MB, peak was {}".format(after / 1e6, peak / 1e6))
-    tracemalloc.stop()
-    if (current - after - 0.09) / after < 0.1:
-        warning("This function may be memory leak")
 
 
 memory_lack_warning()
@@ -420,6 +405,7 @@ def get_jac_np(displacement):
     D = D1 - D2 + D3
 
     return D
+
 
 ############################ This code is from FAIM ###################################
 

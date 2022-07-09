@@ -113,34 +113,32 @@ def gen_flow_scale(shape_, scale: torch.FloatTensor):
     return grid * (1 - 1 / scale)
 
 
-
-
 if __name__ == '__main__':
     import utils_medical.preproccess as prp
     import utils_medical.plot as plot
 
-    # image = prp.read_image("../data/bus.jpg").astype(np.float32)
-    # # flow = gen_flow_scale(image.shape[:-1], 1)
-    #
-    # ts_img = torch.from_numpy(image)[None, ...].permute(0, 3, 1, 2)
-    # scale = torch.ones(1, 2, 1, 1).type(torch.FloatTensor) * 2
-    # t = torch.tensor([200, 200])[None, :, None, None].type(torch.FloatTensor)
-    #
-    # s_flow = gen_flow_scale(ts_img.shape[-2:], scale)
-    # t_flow = gen_flow_transport(ts_img.shape[-2:], t)
-    #
-    # sp_trans = SpatialTransformer(image.shape[:-1])
-    # compose_flow = s_flow + sp_trans(t_flow, s_flow)
-    #
-    # ts_new = sp_trans(ts_img, compose_flow)
-    #
-    # np_new = ts_new.permute(0, 2, 3, 1).numpy()
-    # np_img = ts_img.permute(0, 2, 3, 1).numpy()
-    # np_flow = compose_flow.permute(0, 2, 3, 1).numpy()
-    #
-    # import matplotlib.pyplot as plt
-    #
-    # plt.imshow(np_new[0, :, ...] / 255)
-    # plt.show()
-    # plot.flow([np_flow[0, ::32, ::32, ...]], width=5)
+    image = prp.read_image("../data/bus.jpg").astype(np.float32)
+    # flow = gen_flow_scale(image.shape[:-1], 1)
+
+    ts_img = torch.from_numpy(image)[None, ...].permute(0, 3, 1, 2)
+    scale = torch.ones(1, 2, 1, 1).type(torch.FloatTensor) * 2
+    t = torch.tensor([200, 200])[None, :, None, None].type(torch.FloatTensor)
+
+    s_flow = gen_flow_scale(ts_img.shape[-2:], scale)
+    t_flow = gen_flow_transport(ts_img.shape[-2:], t)
+
+    sp_trans = SpatialTransformer(image.shape[:-1])
+    compose_flow = s_flow + sp_trans(t_flow, s_flow)
+
+    ts_new = sp_trans(ts_img, compose_flow)
+
+    np_new = ts_new.permute(0, 2, 3, 1).numpy()
+    np_img = ts_img.permute(0, 2, 3, 1).numpy()
+    np_flow = compose_flow.permute(0, 2, 3, 1).numpy()
+
+    import matplotlib.pyplot as plt
+
+    plt.imshow(np_new[0, :, ...] / 255)
+    plt.show()
+    plot.flow([np_flow[0, ::32, ::32, ...]], width=5)
 

@@ -499,6 +499,52 @@ def resample(scans_stack, scan=None, old_spacing: tuple = None, new_spacing=(1, 
                        interpolation=interpolation, order=order, mode=mode)
 
 
+def resize_nd(np_voxel: np.ndarray, new_size: Union[int, tuple], interpolation='linear'):
+    """
+    Resize for Nd array (one channel)
+    3d voxel: 7x - 15x memory will be allocated.
+    nearest: 1 loclist, 2 voxel copy, clip copy
+    linear: 1 loclist, 9 voxel copy, clip copy
+    :param np_voxel: numpy ndarray
+    :param new_size: resize to new size
+    :param interpolation: 'linear' or 'nearest'
+    :return:
+    """
+
+    shape_ = np_voxel.shape
+    dim_ = np_voxel.ndim
+
+    if isinstance(new_size, int):
+        scale = (new_size,) * dim_
+
+    assert new_size > (0,) * dim_
+    scale = tuple([i / j for i, j in zip(new_size, shape_)])
+
+    return resample_nd(np_voxel, spacing=scale, new_spacing=(1,) * dim_, interpolation=interpolation)
+
+
+def resize_nd_(np_voxel: np.ndarray, scale: Union[int, tuple], interpolation='linear'):
+    """
+    Resize for Nd array (one channel)
+    3d voxel: 7x - 15x memory will be allocated.
+    nearest: 1 loc_list, 2 voxel copy, clip copy
+    linear: 1 loc_list, 9 voxel copy, clip copy
+    :param np_voxel: numpy ndarray
+    :param scale: scale
+    :param interpolation: 'linear' or 'nearest'
+    :return:
+    """
+
+    shape_ = np_voxel.shape
+    dim_ = np_voxel.ndim
+    if isinstance(scale, int):
+        scale = (scale,) * dim_
+
+    assert scale > (0,) * dim_
+
+    return resample_nd(np_voxel, spacing=scale, new_spacing=(1,) * dim_, interpolation=interpolation)
+
+
 def resample_nd(np_voxel, spacing: tuple = None, new_spacing=(1, 1, 1), interpolation='linear'):
     """
     :param np_voxel: numpy N-d voxel array.
@@ -603,26 +649,31 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
 
         # clip values
         max_loc = [d - 1 for d in list(org_size)]
-        clipped_loc = [np.clip(loc[..., d], 0, max_loc[d]) for d in range(nb_dims)]
         loc0lst = [np.clip(loc0[..., d], 0, max_loc[d]) for d in range(nb_dims)]
+        del loc0
+        clipped_loc = [np.clip(loc[..., d], 0, max_loc[d]) for d in range(nb_dims)]
 
         # get other end of point cube
         loc1 = [np.clip(loc0lst[d] + 1, 0, max_loc[d]) for d in range(nb_dims)]
+        del max_loc
         locs = [[f.astype(np.int32) for f in loc0lst], [f.astype(np.int32) for f in loc1]]
-
+        del loc0lst
         # compute the difference between the upper value and the original value
         # differences are basically 1 - (pt - floor(pt))
         #   because: floor(pt) + 1 - pt = 1 + (floor(pt) - pt) = 1 - (pt - floor(pt))
         diff_loc1 = [loc1[d] - clipped_loc[d] for d in range(nb_dims)]
+        del loc1
+        del clipped_loc
         diff_loc0 = [1 - d for d in diff_loc1]
 
         weights_loc = [diff_loc1, diff_loc0]  # note reverse ordering since weights are inverse of diff.
-
+        del diff_loc0
+        del diff_loc1
         # go through all the cube corners, indexed by a ND binary vector
         # e.g. [0, 0] means this "first" corner in a 2-D "cube"
         cube_pts = list(itertools.product([0, 1], repeat=nb_dims))
         interp_vol = 0
-        vox_reshaped = vox.reshape((-1,))
+        vox_reshaped = vox.view()
         for c in cube_pts:
             # get nd values
             # note re: indices above volumes via https://github.com/tensorflow/tensorflow/issues/15091
@@ -652,8 +703,8 @@ def _interpn(loc, org_size, vox, new_shape, interpolation):
 
             # compute final weighted value for each cube corner
             interp_vol += wt * vol_val
-
-        interp_vol = np.reshape(interp_vol, new_shape)
+        interp_vol: np.ndarray
+        interp_vol = interp_vol.reshape(new_shape)
 
     elif interpolation == 'nearest':
         loc = np.round(loc).astype(np.int32)
@@ -680,14 +731,14 @@ def _get_transformed_locs(shape, new_shape):
     scales = np.multiply(scales, np.eye(ndims))
 
     # get the original coordinate DIMS x PIXEL_NUMBER
-    grid = np.array(grid)
+    grid = np.stack(grid, 0)
     shape = grid.shape
     location_list = grid.reshape(shape[0], -1).transpose()
 
     # the location in the origin voxel
-    transformed_loc = _transform(location_list, scales).transpose()
+    transformed_loc = _transform(location_list, scales)
 
-    return transformed_loc.transpose()
+    return transformed_loc
 
 
 def _transform(loc, affine_matrix):
@@ -1652,6 +1703,7 @@ def gauss_kernel(kernel_size, channels, sigma=(1, 1, 1)):
 def elastic_transform_random_multi_channel(datas: list, interpolations=None, kernel_size=9, scale=1, sigma=3, filter=None):
     """
     Input data list has to be a list contains numpy array that size of (X_0, X_1, ..., X_n, Dim_channel)
+    :ivar interpolations linear or nearest
     :rtype: tuple (numpy.ndarray, numpy.ndarray)
     """
     assert len(datas) > 0 and kernel_size > 0
@@ -1665,6 +1717,7 @@ def elastic_transform_random_multi_channel(datas: list, interpolations=None, ker
             interpolations = [interpolations] * len(datas)
 
     res = []
+    dsm = None
     for idx, data in enumerate(datas):
         channels = data.shape[-1]
         data_chn = [data[..., c] for c in range(channels)]
@@ -1673,7 +1726,8 @@ def elastic_transform_random_multi_channel(datas: list, interpolations=None, ker
 
     return res, dsm
 
-def elastic_transform_random_one_channel(datas: list, interpolations = None, kernel_size=9, scale=1, sigma=3, filter=None):
+
+def elastic_transform_random_one_channel(datas: list, interpolations=None, kernel_size=9, scale=1, sigma=3, filter=None):
     def random_displacement(shape_, a):
         grids = _grid2(shape_)
         f = filter if filter is not None else default_filter
@@ -1721,4 +1775,23 @@ def elastic_transform_random_one_channel(datas: list, interpolations = None, ker
         data = resample_nd_by_transform_field(data, smdsp, interpolation=interpolations[idx])
         results.append(data)
 
-    return tuple(results), dsm.reshape(*data.shape, data.ndim)
+    return tuple(results), dsm.reshape(*results[0].shape, data.ndim)
+
+
+def mask_random(x: np.ndarray, mask_template: np.ndarray, size_min: Union[int, tuple], size_max: Union[int, tuple]):
+    dim_ = x.ndim
+    if isinstance(size_min, int):
+        size_min = tuple([size_min for _ in range(dim_)])
+    if isinstance(size_max, int):
+        size_max = tuple([size_max for _ in range(dim_)])
+
+    shape_ = x.shape
+
+    random_shape = [
+        random.randint(size_min[d], size_max[d])
+        for d in range(dim_)
+    ]
+
+    random_shape = tuple(random_shape)
+
+    mask_template = resize_nd(mask_template, random_shape)
