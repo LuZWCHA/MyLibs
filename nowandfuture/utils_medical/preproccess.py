@@ -501,7 +501,7 @@ def resample(scans_stack, scan=None, old_spacing: tuple = None, new_spacing=(1, 
 
 def resize_nd(np_voxel: np.ndarray, new_size: Union[int, tuple], interpolation='linear'):
     """
-    Resize for Nd array (one channel)
+    Resize for N-D array (one channel)
     3d voxel: 7x - 15x memory will be allocated.
     nearest: 1 loclist, 2 voxel copy, clip copy
     linear: 1 loclist, 9 voxel copy, clip copy
@@ -525,7 +525,7 @@ def resize_nd(np_voxel: np.ndarray, new_size: Union[int, tuple], interpolation='
 
 def resize_nd_(np_voxel: np.ndarray, scale: Union[int, tuple], interpolation='linear'):
     """
-    Resize for Nd array (one channel)
+    Resize for N-D array (one channel)
     3d voxel: 7x - 15x memory will be allocated.
     nearest: 1 loc_list, 2 voxel copy, clip copy
     linear: 1 loc_list, 9 voxel copy, clip copy
@@ -547,7 +547,7 @@ def resize_nd_(np_voxel: np.ndarray, scale: Union[int, tuple], interpolation='li
 
 def resample_nd(np_voxel, spacing: tuple = None, new_spacing=(1, 1, 1), interpolation='linear'):
     """
-    :param np_voxel: numpy N-d voxel array.
+    :param np_voxel: numpy N-D voxel array.
     :param spacing: the spacing of the voxel.
     :param new_spacing: the except spacing.
     :param interpolation: the interpolation.
@@ -1794,4 +1794,16 @@ def mask_random(x: np.ndarray, mask_template: np.ndarray, size_min: Union[int, t
 
     random_shape = tuple(random_shape)
 
-    mask_template = resize_nd(mask_template, random_shape)
+    mask_template = resize_nd(mask_template, random_shape, interpolation='nearest')
+
+    random_pos = [
+        random.randint(0, s - random_shape[idx])
+        for idx, s in enumerate(shape_)
+    ]
+
+    slices = tuple([slice(s, s + size_) for s, size_ in zip(random_pos, random_shape)])
+    x[slices] *= mask_template
+
+    return x
+
+
