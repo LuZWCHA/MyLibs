@@ -123,7 +123,7 @@ def group(group_list, func):
         func(root, file_path, file_name, is_dir, **kwargs)
 
 
-def async_process(_from: str, _to: str, func: Callable[[str, str, str, bool, Dict[str, Any]], None], pattern=r'.*', filter_tuple=(), target='name', pool=None) -> None:
+def async_process(_from: str, _to: str, func: Callable[[str, str, str, bool, Dict[str, Any]], None], pattern=r'.*', filter_tuple=(), target='name', group_size = 20, pool=None) -> None:
     """
     Process the files async
     :param _from: The files to process
@@ -134,7 +134,7 @@ def async_process(_from: str, _to: str, func: Callable[[str, str, str, bool, Dic
     :param target: The file name or the file path to feed to callback function
     :param pool: The process pool
     """
-    group_size = 20
+
     if not pool:
         pool = multiprocessing.Pool(multiprocessing.cpu_count() - 1)
 

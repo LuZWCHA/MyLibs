@@ -1549,7 +1549,7 @@ def joint_patch(output_data: np.ndarray, patch: np.ndarray, patch_stride: Tuple,
     return output_data, count_data
 
 
-def clip_percent(data: np.ndarray, percent: float):
+def clip_by_percent(data: np.ndarray, percent: float):
     min_ = np.percentile(data, 100 - percent)
     max_ = np.percentile(data, percent)
     return np.clip(data, min_, max_)
@@ -1767,15 +1767,15 @@ def elastic_transform_random_one_channel(datas: list, interpolations=None, kerne
             interpolations = [interpolations] * len(datas)
 
     results = []
-    dsm = None
+    dsm = smdsp = None
     for idx, data in enumerate(datas):
-        if dsm is None:
+        if dsm is None or smdsp is None:
             smdsp, dsm = random_displacement(data.shape, scale)
 
         data = resample_nd_by_transform_field(data, smdsp, interpolation=interpolations[idx])
         results.append(data)
 
-    return tuple(results), dsm.reshape(*results[0].shape, data.ndim)
+    return tuple(results), dsm.reshape(*results[0].shape, results[0].ndim)
 
 
 def mask_random(x: np.ndarray, mask_template: np.ndarray, size_min: Union[int, tuple], size_max: Union[int, tuple]):
@@ -1805,5 +1805,4 @@ def mask_random(x: np.ndarray, mask_template: np.ndarray, size_min: Union[int, t
     x[slices] *= mask_template
 
     return x
-
 
